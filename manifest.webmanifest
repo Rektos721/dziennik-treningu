@@ -1,0 +1,17 @@
+{
+  "name": "Dziennik Sztangi",
+  "short_name": "Dziennik",
+  "description": "Dziennik treningowy FBW A/B - serie, ciezary i powtorzenia z podpowiedzia progresji.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#15181C",
+  "theme_color": "#15181C",
+  "lang": "pl",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
