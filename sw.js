@@ -1,7 +1,7 @@
 /* Dziennik Sztangi - service worker.
    App shell cached on install so the page opens with zero signal.
    Bump CACHE when index.html changes, otherwise the old copy wins. */
-var CACHE = "dziennik-v1";
+var CACHE = "dziennik-v2";
 var SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", function (e) {

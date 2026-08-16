@@ -322,10 +322,12 @@
     background: var(--surface); border-top: 1px solid var(--line-strong);
     padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
   }
-  .restinner { max-width: 512px; margin: 0 auto; display: flex; align-items: center; gap: 12px; }
+  .restinner { max-width: 512px; margin: 0 auto; display: flex; align-items: center; gap: 8px; }
+  .restinner .btn.sm { padding: 0 10px; flex: 0 0 auto; }
   .restnum {
-    font-family: var(--mono); font-size: 26px; font-weight: 700;
-    font-variant-numeric: tabular-nums; letter-spacing: .02em; min-width: 76px;
+    font-family: var(--mono); font-size: 24px; font-weight: 700;
+    font-variant-numeric: tabular-nums; letter-spacing: .02em;
+    min-width: 62px; flex: 0 0 auto;
   }
   .restnum.zero { color: var(--signal-text); }
   .restlabel {
@@ -401,34 +403,37 @@
 (function () {
   "use strict";
 
+  /* rest: sekundy przerwy PO serii tego ćwiczenia.
+     120 s dla złożonych (fosfokreatyna zdąży się odbudować, kolejna seria nie siada),
+     90 s dla izolowanych, gdzie zmęczenie schodzi szybciej. */
   var PLANS = {
     A: {
       label: "Trening A",
       ex: [
-        { id: "bench-flat", name: "Wyciskanie na ławce poziomej", sets: 3, lo: 6, hi: 10, variants: ["Sztanga", "Hantle"] },
-        { id: "row-machine", name: "Wiosłowanie na maszynie", sets: 3, lo: 10, hi: 12 },
-        { id: "ohp-db", name: "Wyciskanie hantli nad głowę", sets: 3, lo: 10, hi: 12, hand: true },
-        { id: "lat-pulldown", name: "Ściąganie drążka wyciągu górnego", sets: 3, lo: 10, hi: 12 },
-        { id: "leg-press", name: "Prasa na nogi", sets: 3, lo: 10, hi: 15 },
-        { id: "curl-db", name: "Uginanie ramion z hantlami", sets: 2, lo: 12, hi: 12, hand: true }
+        { id: "bench-flat", name: "Wyciskanie na ławce poziomej", sets: 3, lo: 6, hi: 10, rest: 120, variants: ["Sztanga", "Hantle"] },
+        { id: "row-machine", name: "Wiosłowanie na maszynie", sets: 3, lo: 10, hi: 12, rest: 120 },
+        { id: "ohp-db", name: "Wyciskanie hantli nad głowę", sets: 3, lo: 10, hi: 12, rest: 120, hand: true },
+        { id: "lat-pulldown", name: "Ściąganie drążka wyciągu górnego", sets: 3, lo: 10, hi: 12, rest: 120 },
+        { id: "leg-press", name: "Prasa na nogi", sets: 3, lo: 10, hi: 15, rest: 120 },
+        { id: "curl-db", name: "Uginanie ramion z hantlami", sets: 2, lo: 12, hi: 12, rest: 90, hand: true }
       ]
     },
     B: {
       label: "Trening B",
       ex: [
-        { id: "bench-incline-db", name: "Wyciskanie hantli na ławce skośnej", sets: 3, lo: 8, hi: 12, hand: true },
-        { id: "row-db", name: "Wiosłowanie hantlem w opadzie", sets: 3, lo: 10, hi: 12, hand: true },
-        { id: "pec-deck", name: "Rozpiętki na maszynie", sets: 3, lo: 12, hi: 15 },
-        { id: "lat-raise", name: "Wznosy bokiem z hantlami", sets: 3, lo: 12, hi: 15, hand: true },
-        { id: "leg-press", name: "Prasa na nogi", sets: 3, lo: 10, hi: 15 },
-        { id: "triceps-cable", name: "Prostowanie ramion na wyciągu", sets: 2, lo: 12, hi: 12 }
+        { id: "bench-incline-db", name: "Wyciskanie hantli na ławce skośnej", sets: 3, lo: 8, hi: 12, rest: 120, hand: true },
+        { id: "row-db", name: "Wiosłowanie hantlem w opadzie", sets: 3, lo: 10, hi: 12, rest: 120, hand: true },
+        { id: "pec-deck", name: "Rozpiętki na maszynie", sets: 3, lo: 12, hi: 15, rest: 90 },
+        { id: "lat-raise", name: "Wznosy bokiem z hantlami", sets: 3, lo: 12, hi: 15, rest: 90, hand: true },
+        { id: "leg-press", name: "Prasa na nogi", sets: 3, lo: 10, hi: 15, rest: 120 },
+        { id: "triceps-cable", name: "Prostowanie ramion na wyciągu", sets: 2, lo: 12, hi: 12, rest: 90 }
       ]
     }
   };
 
   var KEY = "dziennik-sztangi-v1";
   var TKEY = "dziennik-sztangi-theme";
-  var REST_DEFAULT = 90;
+  var REST_DEFAULT = 120;
 
   var S = load();
   var tab = "t";
@@ -689,10 +694,14 @@
     var pct = Math.max(0, Math.min(100, (left / rest.total) * 100));
     restSlot.innerHTML = '<div class="rest"><div class="restinner">' +
       '<span class="restnum' + (left <= 0 ? " zero" : "") + '">' + (left <= 0 ? "gotowe" : mmss(left)) + "</span>" +
-      '<span class="restgrow"><span class="restlabel">Przerwa</span>' +
+      '<span class="restgrow"><span class="restlabel">' + esc(rest.label || "Przerwa") + "</span>" +
       '<span class="restbar"><span class="restfill" style="width:' + pct + '%"></span></span></span>' +
+      '<button class="btn sm ghost" id="rest-plus">+30</button>' +
       '<button class="btn sm ghost" id="rest-x">' + (left <= 0 ? "OK" : "Pomiń") + "</button></div></div>";
     document.getElementById("rest-x").addEventListener("click", function () { rest = null; renderRest(); });
+    document.getElementById("rest-plus").addEventListener("click", function () {
+      rest.end += 30000; rest.total += 30; rest.buzzed = false; renderRest();
+    });
   }
 
   setInterval(function () {
@@ -791,8 +800,10 @@
       var r = parseInt(document.getElementById("in-r").value, 10);
       if (isNaN(w) || isNaN(r) || r <= 0) { toast("Wpisz ciężar i powtórzenia"); return; }
       entryOf(editing.exId).sets[editing.i] = { w: w, r: r };
+      var rd = exDef(editing.exId);
+      var secs = (rd && rd.rest) || REST_DEFAULT;
       editing = null;
-      rest = { end: Date.now() + REST_DEFAULT * 1000, total: REST_DEFAULT, buzzed: false };
+      rest = { end: Date.now() + secs * 1000, total: secs, buzzed: false, label: secs >= 120 ? "Przerwa · ruch złożony" : "Przerwa · izolacja" };
       persist(); render();
     });
     if (q("ed-cancel")) q("ed-cancel").addEventListener("click", function () {
