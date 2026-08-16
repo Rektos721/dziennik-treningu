@@ -404,13 +404,14 @@
   "use strict";
 
   /* rest: sekundy przerwy PO serii tego ćwiczenia.
-     120 s dla złożonych (fosfokreatyna zdąży się odbudować, kolejna seria nie siada),
-     90 s dla izolowanych, gdzie zmęczenie schodzi szybciej. */
+     180 s na pierwszym, najcięższym ruchu sesji - robiony na świeżo i to na nim
+     najbardziej widać spadek w kolejnych seriach przy zbyt krótkiej przerwie.
+     120 s dla pozostałych złożonych, 90 s dla izolowanych. */
   var PLANS = {
     A: {
       label: "Trening A",
       ex: [
-        { id: "bench-flat", name: "Wyciskanie na ławce poziomej", sets: 3, lo: 6, hi: 10, rest: 120, variants: ["Sztanga", "Hantle"] },
+        { id: "bench-flat", name: "Wyciskanie na ławce poziomej", sets: 3, lo: 6, hi: 10, rest: 180, variants: ["Sztanga", "Hantle"] },
         { id: "row-machine", name: "Wiosłowanie na maszynie", sets: 3, lo: 10, hi: 12, rest: 120 },
         { id: "ohp-db", name: "Wyciskanie hantli nad głowę", sets: 3, lo: 10, hi: 12, rest: 120, hand: true },
         { id: "lat-pulldown", name: "Ściąganie drążka wyciągu górnego", sets: 3, lo: 10, hi: 12, rest: 120 },
@@ -421,7 +422,7 @@
     B: {
       label: "Trening B",
       ex: [
-        { id: "bench-incline-db", name: "Wyciskanie hantli na ławce skośnej", sets: 3, lo: 8, hi: 12, rest: 120, hand: true },
+        { id: "bench-incline-db", name: "Wyciskanie hantli na ławce skośnej", sets: 3, lo: 8, hi: 12, rest: 180, hand: true },
         { id: "row-db", name: "Wiosłowanie hantlem w opadzie", sets: 3, lo: 10, hi: 12, rest: 120, hand: true },
         { id: "pec-deck", name: "Rozpiętki na maszynie", sets: 3, lo: 12, hi: 15, rest: 90 },
         { id: "lat-raise", name: "Wznosy bokiem z hantlami", sets: 3, lo: 12, hi: 15, rest: 90, hand: true },
@@ -803,7 +804,8 @@
       var rd = exDef(editing.exId);
       var secs = (rd && rd.rest) || REST_DEFAULT;
       editing = null;
-      rest = { end: Date.now() + secs * 1000, total: secs, buzzed: false, label: secs >= 120 ? "Przerwa · ruch złożony" : "Przerwa · izolacja" };
+      var lbl = secs >= 180 ? "Przerwa · główny ruch" : (secs >= 120 ? "Przerwa · ruch złożony" : "Przerwa · izolacja");
+      rest = { end: Date.now() + secs * 1000, total: secs, buzzed: false, label: lbl };
       persist(); render();
     });
     if (q("ed-cancel")) q("ed-cancel").addEventListener("click", function () {
