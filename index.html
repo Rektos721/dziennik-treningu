@@ -120,7 +120,7 @@
     font-variant-numeric: tabular-nums;
   }
   .clock.live { color: var(--signal-text); font-weight: 700; }
-  #theme {
+  #theme, #sig {
     border: 1px solid var(--line);
     background: transparent;
     color: var(--ink-2);
@@ -387,6 +387,7 @@
       <span class="brand">Dziennik sztangi</span>
       <span class="barright">
         <span class="clock" id="clock"></span>
+        <button id="sig" title="Sygnal konca przerwy">Sygnal</button>
         <button id="theme" title="Motyw">Auto</button>
       </span>
     </div>
@@ -456,6 +457,96 @@
     } catch (e) { return blank(); }
   }
   function persist() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+
+  /* ---------- sygnal konca przerwy ----------
+     Sama wibracja nie wystarcza z dwoch powodow: iOS Safari nie ma
+     navigator.vibrate w ogole, a przy zgaszonym ekranie setInterval jest
+     dlawiony, wiec sygnal potrafi sie spoznic o kilkadziesiat sekund.
+     Stad trzy rzeczy naraz: wake lock trzyma ekran wybudzony na czas sesji,
+     beep leci przez WebAudio, wibracja zostaje dla telefonu w kieszeni. */
+
+  var SKEY = "dziennik-sztangi-sig";
+  var MODES = ["oba", "dzwiek", "wibracja", "cicho"];
+  var LABELS = { oba: "Beep+wib", dzwiek: "Beep", wibracja: "Wibracja", cicho: "Cicho" };
+  var actx = null, wakeLock = null;
+
+  function loadSig() {
+    try { var r = localStorage.getItem(SKEY); return MODES.indexOf(r) >= 0 ? r : "oba"; }
+    catch (e) { return "oba"; }
+  }
+  var sigMode = loadSig();
+
+  function paintSig() {
+    var b = document.getElementById("sig");
+    if (b) b.textContent = LABELS[sigMode];
+  }
+
+  /* AudioContext utworzony poza gestem uzytkownika rodzi sie zawieszony
+     i pierwszy beep przepada. Stad odpalenie przy pierwszym dotknieciu. */
+  function primeAudio() {
+    try {
+      if (!actx) {
+        var C = window.AudioContext || window.webkitAudioContext;
+        if (C) actx = new C();
+      }
+      if (actx && actx.state === "suspended") actx.resume();
+    } catch (e) {}
+  }
+  document.addEventListener("pointerdown", primeAudio, true);
+
+  function beep() {
+    if (!actx) return;
+    try {
+      if (actx.state === "suspended") actx.resume();
+      var t = actx.currentTime;
+      [0, 0.3].forEach(function (off) {
+        var o = actx.createOscillator(), g = actx.createGain();
+        o.type = "sine";
+        o.frequency.value = 880;
+        /* rampy zamiast twardego start/stop, inaczej slychac trzask */
+        g.gain.setValueAtTime(0.0001, t + off);
+        g.gain.exponentialRampToValueAtTime(0.35, t + off + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + off + 0.24);
+        o.connect(g); g.connect(actx.destination);
+        o.start(t + off); o.stop(t + off + 0.26);
+      });
+    } catch (e) {}
+  }
+
+  function signal() {
+    if (sigMode === "oba" || sigMode === "wibracja") {
+      if (navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (e) {} }
+    }
+    if (sigMode === "oba" || sigMode === "dzwiek") beep();
+    toast("Przerwa skonczona");
+  }
+
+  /* Wake lock jest zwalniany przez przegladarke przy ukryciu karty,
+     wiec trzeba go zadac ponownie po powrocie na ekran. */
+  function wakeOn() {
+    if (!navigator.wakeLock || wakeLock) return;
+    navigator.wakeLock.request("screen").then(function (l) {
+      wakeLock = l;
+      l.addEventListener("release", function () { wakeLock = null; });
+    }).catch(function () {});
+  }
+  function wakeOff() {
+    if (!wakeLock) return;
+    try { wakeLock.release(); } catch (e) {}
+    wakeLock = null;
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && S.active) wakeOn();
+  });
+
+  document.getElementById("sig").addEventListener("click", function () {
+    sigMode = MODES[(MODES.indexOf(sigMode) + 1) % MODES.length];
+    try { localStorage.setItem(SKEY, sigMode); } catch (e) {}
+    paintSig();
+    primeAudio();
+    if (sigMode !== "cicho") signal();
+  });
+  paintSig();
 
   /* ---------- theme ---------- */
   var THEMES = ["auto", "light", "dark"];
@@ -564,10 +655,12 @@
 
   function renderClock() {
     if (S.active) {
+      wakeOn();
       var mins = Math.floor((Date.now() - new Date(S.active.start).getTime()) / 60000);
       clockEl.textContent = PLANS[S.active.plan].label.toUpperCase() + " · " + mins + " min";
       clockEl.className = "clock live";
     } else {
+      wakeOff();
       var n = done(S.sessions).length;
       clockEl.textContent = n ? n + (n === 1 ? " trening" : " treningów") : "brak treningów";
       clockEl.className = "clock";
@@ -710,7 +803,7 @@
       var left = Math.ceil((rest.end - Date.now()) / 1000);
       if (left <= 0 && !rest.buzzed) {
         rest.buzzed = true;
-        if (navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (e) {} }
+        signal();
       }
       if (left < -20) rest = null;
       renderRest();
