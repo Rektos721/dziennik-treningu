@@ -441,10 +441,15 @@
   var tab = "t";
   var editing = null;
   var openSess = null;
-  var rest = null;
+  var rest = (S.rest && typeof S.rest.end === "number" && S.rest.end > Date.now() - 20000)
+    ? S.rest : null;
+  /* armed opisuje harmonogram konkretnego AudioContextu, a ten nie przezywa
+     przeladowania. Zostawione z poprzedniej instancji udawaloby, ze beep
+     jest juz zaplanowany, i przerwa skonczylaby sie w ciszy. */
+  if (rest) rest.armed = false;
   var toastTimer = null;
 
-  function blank() { return { sessions: [], active: null }; }
+  function blank() { return { sessions: [], active: null, rest: null }; }
 
   function load() {
     try {
@@ -453,22 +458,39 @@
       var o = JSON.parse(raw);
       if (!o || !Array.isArray(o.sessions)) return blank();
       if (o.active === undefined) o.active = null;
+      if (o.rest === undefined) o.rest = null;
       return o;
     } catch (e) { return blank(); }
   }
-  function persist() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+  function persist() {
+    S.rest = rest;
+    try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
+  }
 
   /* ---------- sygnal konca przerwy ----------
-     Sama wibracja nie wystarcza z dwoch powodow: iOS Safari nie ma
-     navigator.vibrate w ogole, a przy zgaszonym ekranie setInterval jest
-     dlawiony, wiec sygnal potrafi sie spoznic o kilkadziesiat sekund.
-     Stad trzy rzeczy naraz: wake lock trzyma ekran wybudzony na czas sesji,
-     beep leci przez WebAudio, wibracja zostaje dla telefonu w kieszeni. */
+     Realny scenariusz uzycia: sluchawki z muzyka, karta w tle, user
+     przeglada cos innego. To wyklucza dwie oczywiste drogi.
+
+     Wibracja odpada z definicji: navigator.vibrate jest ignorowane przy
+     niewidocznej stronie (a iOS Safari nie ma go wcale). Zostaje dla
+     przypadku, gdy apka jest na wierzchu.
+
+     Odliczanie w setInterval tez odpada: Android dlawi timery na karcie
+     w tle, a po kilku minutach zamraza je calkiem, wiec beep odpalany
+     z tiku zegara nigdy by nie zagral albo spoznilby sie o minuty.
+
+     Dziala natomiast planowanie z gory. WebAudio ma wlasny zegar na
+     watku audio, niezalezny od JS-a, wiec oscillator.start(t + 120)
+     trafia do harmonogramu karty dzwiekowej juz w chwili startu przerwy
+     i odpala sie co do probki nawet przy zamrozonym JavaScripcie.
+     Warunek: AudioContext musi zostac w stanie running - Chrome nie
+     zamraza kart, ktore graja, wiec trzymamy ciche zrodlo na stale
+     (patrz keepAlive). */
 
   var SKEY = "dziennik-sztangi-sig";
   var MODES = ["oba", "dzwiek", "wibracja", "cicho"];
   var LABELS = { oba: "Beep+wib", dzwiek: "Beep", wibracja: "Wibracja", cicho: "Cicho" };
-  var actx = null, wakeLock = null;
+  var actx = null, wakeLock = null, keepAlive = null, sched = [];
 
   function loadSig() {
     try { var r = localStorage.getItem(SKEY); return MODES.indexOf(r) >= 0 ? r : "oba"; }
@@ -490,34 +512,92 @@
         if (C) actx = new C();
       }
       if (actx && actx.state === "suspended") actx.resume();
+      startKeepAlive();
+      if (rest && !rest.armed && !rest.buzzed) armRest();
     } catch (e) {}
   }
   document.addEventListener("pointerdown", primeAudio, true);
 
-  function beep() {
-    if (!actx) return;
+  /* Kotwica przeciw zamrozeniu karty. Ton 40 Hz na sladowej glosnosci:
+     dla przegladarki strona gra, wiec nie zostaje uspiona i zaplanowane
+     beepy dochodza do skutku; dla ucha w sluchawkach z muzyka to nic. */
+  function startKeepAlive() {
+    if (!actx || keepAlive) return;
     try {
-      if (actx.state === "suspended") actx.resume();
-      var t = actx.currentTime;
-      [0, 0.3].forEach(function (off) {
-        var o = actx.createOscillator(), g = actx.createGain();
-        o.type = "sine";
-        o.frequency.value = 880;
-        /* rampy zamiast twardego start/stop, inaczej slychac trzask */
-        g.gain.setValueAtTime(0.0001, t + off);
-        g.gain.exponentialRampToValueAtTime(0.35, t + off + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + off + 0.24);
-        o.connect(g); g.connect(actx.destination);
-        o.start(t + off); o.stop(t + off + 0.26);
-      });
+      var o = actx.createOscillator(), g = actx.createGain();
+      o.type = "sine";
+      o.frequency.value = 40;
+      g.gain.value = 0.0025;
+      o.connect(g); g.connect(actx.destination);
+      o.start();
+      keepAlive = o;
     } catch (e) {}
   }
 
-  function signal() {
+  /* Jeden puls beepa zaplanowany na konkretny moment zegara audio. */
+  function pulse(at, freq) {
+    var o = actx.createOscillator(), g = actx.createGain();
+    o.type = "sine";
+    o.frequency.value = freq;
+    /* rampy zamiast twardego start/stop, inaczej slychac trzask */
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.9, at + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.26);
+    o.connect(g); g.connect(actx.destination);
+    o.start(at); o.stop(at + 0.28);
+    sched.push(o);
+    return o;
+  }
+
+  /* Trzy pulsy z rosnaca wysokoscia - przez muzyke w sluchawkach
+     pojedyncze piknienie na 880 Hz gubi sie w miksie. */
+  function beepAt(delaySec, onFired) {
+    if (!actx) return false;
+    try {
+      if (actx.state === "suspended") actx.resume();
+      var t = actx.currentTime + Math.max(0, delaySec);
+      pulse(t, 880);
+      pulse(t + 0.32, 1175);
+      var last = pulse(t + 0.64, 1568);
+      if (onFired) last.addEventListener("ended", onFired);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function beep() { return beepAt(0, null); }
+
+  /* Wpisuje beep do harmonogramu na moment konca biezacej przerwy.
+     Wolane przy starcie przerwy, przy +30 i przy pierwszym dotknieciu
+     ekranu (bo przed gestem uzytkownika AudioContext nie ma prawa grac,
+     wiec przerwa odtworzona po restarcie apki uzbraja sie z opoznieniem). */
+  function armRest() {
+    cancelScheduled();
+    if (!rest) return;
+    rest.armed = false;
+    if (!soundOn() || rest.buzzed) return;
+    var left = (rest.end - Date.now()) / 1000;
+    if (left <= 0) return;
+    rest.armed = beepAt(left, null);
+  }
+
+  /* Przy Pomin i +30 trzeba wycofac to, co juz siedzi w harmonogramie,
+     inaczej odezwie sie o starej porze. */
+  function cancelScheduled() {
+    sched.forEach(function (o) { try { o.stop(); } catch (e) {} });
+    sched = [];
+  }
+
+  function soundOn() { return sigMode === "oba" || sigMode === "dzwiek"; }
+
+  /* Wywolywane z tiku zegara, czyli tylko gdy karta jest widoczna.
+     Dzwiek jest tu zapasem na wypadek, gdyby planowanie sie nie udalo
+     (brak AudioContext, kontekst ubity przez system). Gdy beep byl
+     zaplanowany i zagral, powtarzanie go teraz dalo by podwojne pikniecie. */
+  function signal(alreadySounded) {
     if (sigMode === "oba" || sigMode === "wibracja") {
       if (navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (e) {} }
     }
-    if (sigMode === "oba" || sigMode === "dzwiek") beep();
+    if (soundOn() && !alreadySounded) beep();
     toast("Przerwa skonczona");
   }
 
@@ -544,7 +624,10 @@
     try { localStorage.setItem(SKEY, sigMode); } catch (e) {}
     paintSig();
     primeAudio();
-    if (sigMode !== "cicho") signal();
+    /* Przelaczenie na Cicho musi zdjac z harmonogramu beep juz zaplanowany,
+       a powrot na dzwiek uzbroic go z powrotem. */
+    armRest();
+    if (sigMode !== "cicho") signal(false);
   });
   paintSig();
 
@@ -792,9 +875,12 @@
       '<span class="restbar"><span class="restfill" style="width:' + pct + '%"></span></span></span>' +
       '<button class="btn sm ghost" id="rest-plus">+30</button>' +
       '<button class="btn sm ghost" id="rest-x">' + (left <= 0 ? "OK" : "Pomiń") + "</button></div></div>";
-    document.getElementById("rest-x").addEventListener("click", function () { rest = null; renderRest(); });
+    document.getElementById("rest-x").addEventListener("click", function () {
+      rest = null; cancelScheduled(); persist(); renderRest();
+    });
     document.getElementById("rest-plus").addEventListener("click", function () {
-      rest.end += 30000; rest.total += 30; rest.buzzed = false; renderRest();
+      rest.end += 30000; rest.total += 30; rest.buzzed = false;
+      armRest(); persist(); renderRest();
     });
   }
 
@@ -803,9 +889,9 @@
       var left = Math.ceil((rest.end - Date.now()) / 1000);
       if (left <= 0 && !rest.buzzed) {
         rest.buzzed = true;
-        signal();
+        signal(rest.armed && soundOn());
       }
-      if (left < -20) rest = null;
+      if (left < -20) { rest = null; persist(); }
       renderRest();
     }
     if (S.active) renderClock();
@@ -899,6 +985,7 @@
       editing = null;
       var lbl = secs >= 180 ? "Przerwa · główny ruch" : (secs >= 120 ? "Przerwa · ruch złożony" : "Przerwa · izolacja");
       rest = { end: Date.now() + secs * 1000, total: secs, buzzed: false, label: lbl };
+      armRest();
       persist(); render();
     });
     if (q("ed-cancel")) q("ed-cancel").addEventListener("click", function () {
@@ -925,14 +1012,14 @@
         if (!a.entries[k].sets.length) delete a.entries[k];
       });
       S.sessions.push(a);
-      S.active = null; rest = null; openSess = a.id;
+      S.active = null; rest = null; cancelScheduled(); openSess = a.id;
       persist(); setTab("h");
       toast("Zapisane. " + n + " serii w bazie");
     });
 
     if (q("abort")) q("abort").addEventListener("click", function () {
       if (!confirm("Porzucić ten trening? Zapisane serie przepadną.")) return;
-      S.active = null; editing = null; rest = null; persist(); render();
+      S.active = null; editing = null; rest = null; cancelScheduled(); persist(); render();
     });
 
     document.querySelectorAll("[data-sess]").forEach(function (b) {
