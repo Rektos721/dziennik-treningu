@@ -1,7 +1,7 @@
 /* Dziennik Sztangi - service worker.
    App shell cached on install so the page opens with zero signal.
    Bump CACHE when index.html changes, otherwise the old copy wins. */
-var CACHE = "dziennik-v5";
+var CACHE = "dziennik-v6";
 var SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", function (e) {
@@ -19,6 +19,20 @@ self.addEventListener("activate", function (e) {
         return k === CACHE ? null : caches.delete(k);
       }));
     }).then(function () { return self.clients.claim(); })
+  );
+});
+
+/* Tapping the rest-over popup should put you back in the app, not open
+   a second copy of it. Reuse a live window if there is one. */
+self.addEventListener("notificationclick", function (e) {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (ws) {
+      for (var i = 0; i < ws.length; i++) {
+        if ("focus" in ws[i]) return ws[i].focus();
+      }
+      return self.clients.openWindow ? self.clients.openWindow("./") : null;
+    })
   );
 });
 

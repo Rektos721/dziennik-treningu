@@ -408,14 +408,31 @@
      180 s na pierwszym, najcięższym ruchu sesji - robiony na świeżo i to na nim
      najbardziej widać spadek w kolejnych seriach przy zbyt krótkiej przerwie.
      120 s dla pozostałych złożonych, 90 s dla izolowanych. */
+  /* Warianty ćwiczenia. Powód: przy zajętym sprzęcie ten sam punkt planu
+     bywa robiony na maszynie, a maszyna to inne ćwiczenie, nie ten sam ruch
+     z innym ciężarem. Bez rozdzielenia historii reguła progresji porównuje
+     vertical traction do wolnego drążka i pokazuje fałszywy regres.
+
+     Pole n  - napis na przycisku i sufiks w historii.
+     Pole label - pełna nazwa, gdy wariant zasługuje na własną (wtedy zastępuje
+                  nazwę ćwiczenia zamiast doklejać się w nawiasie).
+     Pola lo / hi / rest / hand - nadpisują wartości ćwiczenia, gdy wariant
+                  ma inny charakter (chest press to ruch złożony w zakresie
+                  8-12, rozpiętki izolacja w 12-15).
+     Pierwszy wariant na liście jest domyślny, więc stoi tu ten realnie
+     używany, nie ten kanoniczny z planu - mniej dotknięć na sali. */
   var PLANS = {
     A: {
       label: "Trening A",
       ex: [
-        { id: "bench-flat", name: "Wyciskanie na ławce poziomej", sets: 3, lo: 6, hi: 10, rest: 180, variants: ["Sztanga", "Hantle"] },
-        { id: "row-machine", name: "Wiosłowanie na maszynie", sets: 3, lo: 10, hi: 12, rest: 120 },
-        { id: "ohp-db", name: "Wyciskanie hantli nad głowę", sets: 3, lo: 10, hi: 12, rest: 120, hand: true },
-        { id: "lat-pulldown", name: "Ściąganie drążka wyciągu górnego", sets: 3, lo: 10, hi: 12, rest: 120 },
+        { id: "bench-flat", name: "Wyciskanie na ławce poziomej", sets: 3, lo: 6, hi: 10, rest: 180,
+          variants: [{ n: "Sztanga" }, { n: "Hantle", hand: true }] },
+        { id: "row-machine", name: "Wiosłowanie na maszynie", sets: 3, lo: 10, hi: 12, rest: 120,
+          variants: [{ n: "Low row" }, { n: "Upper back" }] },
+        { id: "ohp-db", name: "Wyciskanie hantli nad głowę", sets: 3, lo: 10, hi: 12, rest: 120,
+          variants: [{ n: "Maszyna", label: "Shoulder press na maszynie" }, { n: "Hantle", hand: true }] },
+        { id: "lat-pulldown", name: "Ściąganie drążka wyciągu górnego", sets: 3, lo: 10, hi: 12, rest: 120,
+          variants: [{ n: "Drążek" }, { n: "Traction", label: "Vertical traction" }] },
         { id: "leg-press", name: "Prasa na nogi", sets: 3, lo: 10, hi: 15, rest: 120 },
         { id: "curl-db", name: "Uginanie ramion z hantlami", sets: 2, lo: 12, hi: 12, rest: 90, hand: true }
       ]
@@ -423,9 +440,15 @@
     B: {
       label: "Trening B",
       ex: [
-        { id: "bench-incline-db", name: "Wyciskanie hantli na ławce skośnej", sets: 3, lo: 8, hi: 12, rest: 180, hand: true },
-        { id: "row-db", name: "Wiosłowanie hantlem w opadzie", sets: 3, lo: 10, hi: 12, rest: 120, hand: true },
-        { id: "pec-deck", name: "Rozpiętki na maszynie", sets: 3, lo: 12, hi: 15, rest: 90 },
+        /* hand siedzi teraz na wariancie Hantle, nie na ćwiczeniu. Wcześniej
+           apka podpisywala "ciężar jednej sztuki" także przy sztandze, więc
+           42,5 kg całkowite z 25.08 czytało się jako 85 kg. */
+        { id: "bench-incline-db", name: "Wyciskanie na ławce skośnej", sets: 3, lo: 8, hi: 12, rest: 180,
+          variants: [{ n: "Sztanga" }, { n: "Hantle", hand: true }] },
+        { id: "row-db", name: "Wiosłowanie w opadzie", sets: 3, lo: 10, hi: 12, rest: 120,
+          variants: [{ n: "Maszyna", label: "Wiosłowanie na maszynie (upper back)" }, { n: "Hantel", hand: true }] },
+        { id: "pec-deck", name: "Rozpiętki na maszynie", sets: 3, lo: 12, hi: 15, rest: 90,
+          variants: [{ n: "Rozpiętki" }, { n: "Chest press", label: "Chest press szerokim chwytem", lo: 8, hi: 12, rest: 120 }] },
         { id: "lat-raise", name: "Wznosy bokiem z hantlami", sets: 3, lo: 12, hi: 15, rest: 90, hand: true },
         { id: "leg-press", name: "Prasa na nogi", sets: 3, lo: 10, hi: 15, rest: 120 },
         { id: "triceps-cable", name: "Prostowanie ramion na wyciągu", sets: 2, lo: 12, hi: 12, rest: 90 }
@@ -490,7 +513,10 @@
   var SKEY = "dziennik-sztangi-sig";
   var MODES = ["oba", "dzwiek", "wibracja", "cicho"];
   var LABELS = { oba: "Beep+wib", dzwiek: "Beep", wibracja: "Wibracja", cicho: "Cicho" };
-  var actx = null, wakeLock = null, keepAlive = null, sched = [];
+  var actx = null, wakeLock = null, keepAlive = null, sched = [], bus = null;
+  /* Numer generacji harmonogramu. stop() przy Pomin tez odpala ended, wiec
+     bez tego licznika pominieta przerwa pokazywalaby powiadomienie. */
+  var restGen = 0;
 
   function loadSig() {
     try { var r = localStorage.getItem(SKEY); return MODES.indexOf(r) >= 0 ? r : "oba"; }
@@ -520,7 +546,9 @@
 
   /* Kotwica przeciw zamrozeniu karty. Ton 40 Hz na sladowej glosnosci:
      dla przegladarki strona gra, wiec nie zostaje uspiona i zaplanowane
-     beepy dochodza do skutku; dla ucha w sluchawkach z muzyka to nic. */
+     beepy dochodza do skutku; dla ucha w sluchawkach z muzyka to nic.
+     Idzie prosto do wyjscia, z pominieciem magistrali, zeby ograniczik
+     nie podniosl go do slyszalnego poziomu. */
   function startKeepAlive() {
     if (!actx || keepAlive) return;
     try {
@@ -534,37 +562,137 @@
     } catch (e) {}
   }
 
-  /* Jeden puls beepa zaplanowany na konkretny moment zegara audio. */
+  /* Magistrala wyjsciowa z lagodnym ograniczeniem (tanh). Fala prostokatna
+     przy pelnej skali obcielaby sie twardo na sumowaniu zboczy, co daje
+     trzask zamiast tonu. Tu zamiast obciecia jest kompresja szczytu. */
+  function outBus() {
+    if (bus) return bus;
+    var sh = actx.createWaveShaper(), n = 1024, c = new Float32Array(n), i;
+    for (i = 0; i < n; i++) {
+      var x = i * 2 / (n - 1) - 1;
+      c[i] = Math.tanh(x * 2.5) / Math.tanh(2.5);
+    }
+    sh.curve = c;
+    sh.oversample = "4x";
+    var out = actx.createGain();
+    out.gain.value = 1;
+    sh.connect(out); out.connect(actx.destination);
+    bus = sh;
+    return bus;
+  }
+
+  /* Jeden puls beepa zaplanowany na konkretny moment zegara audio.
+
+     Fala prostokatna zamiast sinusa. Powod jest fizyczny, nie estetyczny:
+     przy tym samym szczycie prostokat ma o 3 dB wyzsza wartosc skuteczna,
+     a jego harmoniczne (3f, 5f, 7f) laduja w pasmie 2-6 kHz, gdzie ucho
+     jest najczulsze i gdzie muzyka maskuje najslabiej. Sinus na 880 Hz
+     siedzial dokladnie tam, gdzie w miksie jest najwiecej energii.
+
+     Dluzszy tez: 0,26 s bylo krocej niz okno calkowania glosnosci w uchu
+     (ok. 200 ms), wiec puls brzmial ciszej, niz wynikalo z jego amplitudy.
+     0,34 s pelnego poziomu wypada juz poza tym progiem. */
   function pulse(at, freq) {
     var o = actx.createOscillator(), g = actx.createGain();
-    o.type = "sine";
+    o.type = "square";
     o.frequency.value = freq;
     /* rampy zamiast twardego start/stop, inaczej slychac trzask */
     g.gain.setValueAtTime(0.0001, at);
-    g.gain.exponentialRampToValueAtTime(0.9, at + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.26);
-    o.connect(g); g.connect(actx.destination);
-    o.start(at); o.stop(at + 0.28);
+    g.gain.exponentialRampToValueAtTime(1, at + 0.008);
+    g.gain.setValueAtTime(1, at + 0.30);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.34);
+    o.connect(g); g.connect(outBus());
+    o.start(at); o.stop(at + 0.36);
     sched.push(o);
     return o;
   }
 
-  /* Trzy pulsy z rosnaca wysokoscia - przez muzyke w sluchawkach
-     pojedyncze piknienie na 880 Hz gubi sie w miksie. */
+  /* Niesłyszalny oscylator wylacznie po to, zeby dostac zdarzenie ended
+     dokladnie w chwili konca przerwy. Zdarzenia z watku audio nie podlegaja
+     dlawieniu timerow na ukrytej karcie, wiec to jedyny pewny sposob
+     obudzenia JS-u w tle - a bez obudzenia nie da sie pokazac powiadomienia. */
+  function triggerAt(at, fn) {
+    var o = actx.createOscillator(), g = actx.createGain();
+    g.gain.value = 0;
+    o.connect(g); g.connect(actx.destination);
+    o.start(at); o.stop(at + 0.02);
+    o.addEventListener("ended", fn);
+    sched.push(o);
+    return o;
+  }
+
+  /* Dwa przebiegi triady w gore zamiast jednego. Jedna seria trzech pulsow
+     trwala 0,9 s i dawala sie przeoczyc; dwie z przerwa brzmia jak alarm,
+     a nie jak zawiadomienie systemowe w tle. */
+  var FREQ = [1175, 1568, 2093];
+
   function beepAt(delaySec, onFired) {
     if (!actx) return false;
     try {
       if (actx.state === "suspended") actx.resume();
-      var t = actx.currentTime + Math.max(0, delaySec);
-      pulse(t, 880);
-      pulse(t + 0.32, 1175);
-      var last = pulse(t + 0.64, 1568);
-      if (onFired) last.addEventListener("ended", onFired);
+      var t = actx.currentTime + Math.max(0, delaySec), i;
+      if (onFired) triggerAt(t, onFired);
+      if (soundOn()) {
+        for (i = 0; i < FREQ.length; i++) pulse(t + i * 0.45, FREQ[i]);
+        for (i = 0; i < FREQ.length; i++) pulse(t + 1.6 + i * 0.45, FREQ[i]);
+      }
       return true;
     } catch (e) { return false; }
   }
 
   function beep() { return beepAt(0, null); }
+
+  /* ---------- powiadomienie systemowe ----------
+     To jest jedyna droga sygnalu, ktora nie idzie przez mikser mediow.
+     WebAudio wychodzi tym samym kanalem co muzyka i nie ma API, zeby ja
+     przyciszyc, wiec przy glosnych sluchawkach beep ma sufit. Kanal
+     powiadomien na Androidzie ma wlasna glosnosc i zwykle sam przycisza
+     muzyke. Do tego pole vibrate wykonuje system, wiec wibracja dziala
+     takze przy karcie w tle, gdzie navigator.vibrate jest ignorowane.
+
+     Musi isc przez service workera: new Notification() jest na Androidzie
+     zablokowane, dziala tylko ServiceWorkerRegistration.showNotification. */
+
+  function notifyReady() {
+    return typeof Notification !== "undefined" &&
+      Notification.permission === "granted" && !!navigator.serviceWorker;
+  }
+
+  /* Zgoda musi byc proszona z gestu uzytkownika, stad wolanie przy starcie
+     sesji i przy przycisku sygnalu, a nie przy wczytaniu strony. */
+  function askNotify() {
+    try {
+      if (typeof Notification === "undefined") return;
+      if (Notification.permission === "default") Notification.requestPermission();
+    } catch (e) {}
+  }
+
+  function notifyRest() {
+    if (!notifyReady()) return;
+    navigator.serviceWorker.ready.then(function (reg) {
+      reg.showNotification("Koniec przerwy", {
+        body: "Następna seria.",
+        tag: "rest",
+        renotify: true,
+        /* zostaje na ekranie do dotkniecia - o to bylo pytanie o popup */
+        requireInteraction: true,
+        vibrate: [220, 120, 220, 120, 220],
+        silent: sigMode === "wibracja",
+        icon: "./icon-192.png",
+        badge: "./icon-192.png"
+      });
+    }).catch(function () {});
+  }
+
+  function clearNotif() {
+    if (!navigator.serviceWorker) return;
+    navigator.serviceWorker.ready.then(function (reg) {
+      if (!reg.getNotifications) return;
+      reg.getNotifications({ tag: "rest" }).then(function (ns) {
+        ns.forEach(function (n) { n.close(); });
+      });
+    }).catch(function () {});
+  }
 
   /* Wpisuje beep do harmonogramu na moment konca biezacej przerwy.
      Wolane przy starcie przerwy, przy +30 i przy pierwszym dotknieciu
@@ -572,17 +700,38 @@
      wiec przerwa odtworzona po restarcie apki uzbraja sie z opoznieniem). */
   function armRest() {
     cancelScheduled();
+    /* Popup z poprzedniej serii wisi do dotkniecia, wiec przy nowej przerwie
+       trzeba go zdjac samemu, inaczej zbiera sie ich kilkanascie. */
+    clearNotif();
     if (!rest) return;
     rest.armed = false;
-    if (!soundOn() || rest.buzzed) return;
+    /* Uzbrajamy takze w trybie Wibracja: sam beep bedzie wtedy niemy, ale
+       cichy oscylator wyzwalajacy jest potrzebny, zeby powiadomienie
+       (a z nim wibracja systemowa) mialo z czego wystartowac w tle. */
+    if (sigMode === "cicho" || rest.buzzed) return;
     var left = (rest.end - Date.now()) / 1000;
     if (left <= 0) return;
-    rest.armed = beepAt(left, null);
+    var gen = ++restGen;
+    rest.armed = beepAt(left, function () {
+      /* Trzy warunki odsiewaja falszywe odpalenia: inna generacja (przerwa
+         pominieta albo przedluzona), brak przerwy, oraz sytuacja gdy do
+         konca bylo jeszcze duzo - to znaczy, ze zdarzenie przyszlo ze
+         stop(), nie z naturalnego konca. */
+      if (gen !== restGen || !rest || rest.buzzed) return;
+      if (Date.now() < rest.end - 1500) return;
+      /* Gdy apka jest na wierzchu, wystarcza zegar na ekranie i beep.
+         Powiadomienie z requireInteraction trzeba by zamykac po kazdej
+         serii, czyli kilkanascie razy na trening. */
+      if (document.visibilityState === "visible") return;
+      notifyRest();
+    });
   }
 
   /* Przy Pomin i +30 trzeba wycofac to, co juz siedzi w harmonogramie,
-     inaczej odezwie sie o starej porze. */
+     inaczej odezwie sie o starej porze. Bump generacji uniewaznia tez
+     wywolania zwrotne, ktore stop() zaraz odpali. */
   function cancelScheduled() {
+    restGen++;
     sched.forEach(function (o) { try { o.stop(); } catch (e) {} });
     sched = [];
   }
@@ -616,7 +765,10 @@
     wakeLock = null;
   }
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "visible" && S.active) wakeOn();
+    if (document.visibilityState !== "visible") return;
+    /* Wrocil do apki, wiec popup zrobil swoje. */
+    clearNotif();
+    if (S.active) wakeOn();
   });
 
   document.getElementById("sig").addEventListener("click", function () {
@@ -624,6 +776,7 @@
     try { localStorage.setItem(SKEY, sigMode); } catch (e) {}
     paintSig();
     primeAudio();
+    askNotify();
     /* Przelaczenie na Cicho musi zdjac z harmonogramu beep juz zaplanowany,
        a powrot na dzwiek uzbroic go z powrotem. */
     armRest();
@@ -663,7 +816,42 @@
     if (n === null || n === undefined || isNaN(n)) return "-";
     return String(Math.round(n * 10) / 10).replace(".", ",");
   }
-  function target(d) { return d.lo === d.hi ? String(d.lo) : d.lo + "-" + d.hi; }
+  /* ---------- rozwiazywanie wariantow ----------
+     Wszystko, co wariant moze nadpisac, przechodzi przez te cztery funkcje,
+     zeby nie trzeba bylo pamietac o wariancie w kazdym miejscu render-u. */
+
+  function vdef(d, vn) {
+    if (!d.variants || !vn) return null;
+    for (var k = 0; k < d.variants.length; k++) if (d.variants[k].n === vn) return d.variants[k];
+    return null;
+  }
+  /* Zakres powtorzen: chest press to 8-12, rozpietki 12-15, mimo ze siedza
+     w tym samym punkcie planu. */
+  function rng(d, vn) {
+    var v = vdef(d, vn);
+    return { lo: v && v.lo != null ? v.lo : d.lo, hi: v && v.hi != null ? v.hi : d.hi };
+  }
+  function restSecs(d, vn) {
+    var v = vdef(d, vn);
+    return (v && v.rest != null ? v.rest : d.rest) || REST_DEFAULT;
+  }
+  /* Czy ciezar liczy sie na reke. Flaga z wariantu bije flage cwiczenia,
+     bo to wariant decyduje, czy w rekach sa hantle. */
+  function perHand(d, vn) {
+    var v = vdef(d, vn);
+    if (v && v.hand != null) return !!v.hand;
+    return !!d.hand;
+  }
+  /* Nazwa do naglowka, historii i eksportu. Wariant z wlasnym label zastepuje
+     nazwe cwiczenia; pozostale dokleja sie w nawiasie. */
+  function dispName(d, vn) {
+    var v = vdef(d, vn);
+    if (v && v.label) return v.label;
+    if (vn) return d.name + " (" + vn.toLowerCase() + ")";
+    return d.name;
+  }
+
+  function target(d, vn) { var r = rng(d, vn); return r.lo === r.hi ? String(r.lo) : r.lo + "-" + r.hi; }
   function dmy(iso) {
     var d = new Date(iso), p = function (x) { return x < 10 ? "0" + x : String(x); };
     return p(d.getDate()) + "." + p(d.getMonth() + 1) + "." + d.getFullYear();
@@ -692,25 +880,25 @@
   }
 
   function suggest(d, exId, variant, i, sets) {
-    var k;
+    var k, r = rng(d, variant);
     for (k = i - 1; k >= 0; k--) if (sets[k]) return { w: sets[k].w, r: sets[k].r, hint: "" };
     var prev = lastFor(exId, variant);
-    if (!prev) return { w: 20, r: d.lo, hint: "Pierwszy raz. Znajdź ciężar na " + d.lo + " spokojnych powtórzeń, z zapasem 2-3 w rezerwie." };
+    if (!prev) return { w: 20, r: r.lo, hint: "Pierwszy raz. Znajdź ciężar na " + r.lo + " spokojnych powtórzeń, z zapasem 2-3 w rezerwie." };
     var ps = prev.entry.sets, maxW = 0, minR = Infinity, allTop = true, j;
     for (j = 0; j < ps.length; j++) {
       if (ps[j].w > maxW) maxW = ps[j].w;
       if (ps[j].r < minR) minR = ps[j].r;
-      if (ps[j].r < d.hi) allTop = false;
+      if (ps[j].r < r.hi) allTop = false;
     }
-    if (allTop) return { w: maxW + 2.5, r: d.lo, hint: "Ostatnio " + d.hi + " powtórzeń w każdej serii, więc dokładasz 2,5 kg i wracasz na " + d.lo + "." };
-    return { w: maxW, r: Math.min(minR + 1, d.hi), hint: "Ten sam ciężar, celuj w jedno powtórzenie więcej niż ostatnio." };
+    if (allTop) return { w: maxW + 2.5, r: r.lo, hint: "Ostatnio " + r.hi + " powtórzeń w każdej serii, więc dokładasz 2,5 kg i wracasz na " + r.lo + "." };
+    return { w: maxW, r: Math.min(minR + 1, r.hi), hint: "Ten sam ciężar, celuj w jedno powtórzenie więcej niż ostatnio." };
   }
 
   function entryOf(exId) {
     var a = S.active;
     if (!a.entries[exId]) {
       var d = exDef(exId);
-      a.entries[exId] = { variant: d && d.variants ? d.variants[0] : null, sets: [] };
+      a.entries[exId] = { variant: d && d.variants ? d.variants[0].n : null, sets: [] };
     }
     return a.entries[exId];
   }
@@ -772,7 +960,7 @@
       var planned = Math.max(d.sets, e.sets.length);
       var filled = e.sets.filter(function (x) { return !!x; }).length;
       h += '<section class="ex' + (filled >= planned ? " done" : "") + '">';
-      h += '<div class="exhead"><span class="exname">' + esc(d.name) + '</span><span class="extarget">' + d.sets + " × " + target(d) + "</span></div>";
+      h += '<div class="exhead"><span class="exname">' + esc(dispName(d, e.variant)) + '</span><span class="extarget">' + d.sets + " × " + target(d, e.variant) + "</span></div>";
       var prev = lastFor(d.id, e.variant);
       if (prev) {
         h += '<div class="prev"><b>Ostatnio ' + dmy(prev.date) + ":</b> " +
@@ -783,11 +971,11 @@
       if (d.variants) {
         h += '<div class="variant">';
         d.variants.forEach(function (v) {
-          h += '<button data-var="' + esc(v) + '" data-ex="' + d.id + '" aria-pressed="' + (e.variant === v ? "true" : "false") + '">' + esc(v) + "</button>";
+          h += '<button data-var="' + esc(v.n) + '" data-ex="' + d.id + '" aria-pressed="' + (e.variant === v.n ? "true" : "false") + '">' + esc(v.n) + "</button>";
         });
         h += "</div>";
       }
-      if (d.hand || (d.variants && e.variant === "Hantle")) {
+      if (perHand(d, e.variant)) {
         h += '<div class="tiny" style="margin-top:6px">Ciężar jednej sztuki</div>';
       }
       h += '<div class="sets">';
@@ -798,7 +986,7 @@
         var cls = "set" + (s ? " filled" : (i === firstEmpty ? " current" : "")) +
           (editing && editing.exId === d.id && editing.i === i ? " editing" : "");
         h += '<button class="' + cls + '" data-ex="' + d.id + '" data-i="' + i + '"><span class="idx">S' + (i + 1) + "</span><span>" +
-          (s ? num(s.w) + "×" + s.r : "—") + "</span></button>";
+          (s ? num(s.w) + "×" + s.r : "-") + "</span></button>";
       }
       h += '<button class="addset" data-add="' + d.id + '" aria-label="Dodaj serię">+</button></div>';
       if (editing && editing.exId === d.id) h += editorHTML(d, e);
@@ -835,9 +1023,14 @@
     var h = "<h2>" + list.length + (list.length === 1 ? " zapisany trening" : " zapisane treningi") + "</h2>";
     list.forEach(function (s) {
       var mins = s.end && s.start ? Math.round((new Date(s.end) - new Date(s.start)) / 60000) : null;
+      /* Przy hantlach zapisany ciezar dotyczy jednej sztuki, wiec do objetosci
+         trzeba go podwoic - inaczej trening z hantlami wyglada na lzejszy,
+         niz byl, i porownanie sesji A do sesji B klamie. */
       var vol = 0;
       Object.keys(s.entries).forEach(function (k) {
-        s.entries[k].sets.forEach(function (x) { if (x) vol += x.w * x.r; });
+        var d = exDef(k), e = s.entries[k];
+        var mult = d && perHand(d, e.variant) ? 2 : 1;
+        e.sets.forEach(function (x) { if (x) vol += x.w * x.r * mult; });
       });
       h += '<div class="sess"><button class="sesshead" data-sess="' + s.id + '">' +
         '<span><span class="sessdate">' + dmy(s.end) + " · " + esc(PLANS[s.plan].label) + '</span><br>' +
@@ -848,7 +1041,7 @@
         PLANS[s.plan].ex.forEach(function (d) {
           var e = s.entries[d.id];
           if (!e || !e.sets.length) return;
-          var nm = d.name + (e.variant ? " (" + e.variant.toLowerCase() + ")" : "");
+          var nm = dispName(d, e.variant) + (perHand(d, e.variant) ? " [na rękę]" : "");
           h += '<div class="sessline"><span class="n">' + esc(nm) + '</span><span class="v">' +
             e.sets.map(function (x) { return num(x.w) + "×" + x.r; }).join("  /  ") + "</span></div>";
         });
@@ -908,7 +1101,9 @@
       PLANS[s.plan].ex.forEach(function (d) {
         var e = s.entries[d.id];
         if (!e || !e.sets.length) return;
-        out += "  " + d.name + (e.variant ? " (" + e.variant.toLowerCase() + ")" : "") + ": " +
+        /* Sufiks [na reke] jest tu po to, zeby eksport dawal sie czytac bez
+           zagladania w kod - inaczej 42,5 przy skosie jest dwuznaczne. */
+        out += "  " + dispName(d, e.variant) + (perHand(d, e.variant) ? " [na rękę]" : "") + ": " +
           e.sets.map(function (x) { return num(x.w) + "x" + x.r; }).join(" / ") + "\n";
       });
       if (s.note) out += "  Notatka: " + s.note + "\n";
@@ -933,6 +1128,9 @@
     document.querySelectorAll("[data-plan]").forEach(function (b) {
       b.addEventListener("click", function () {
         S.active = { plan: b.dataset.plan, start: new Date().toISOString(), entries: {}, note: "" };
+        /* Start treningu to naturalny moment na zgode: jest gest, jest
+           powod, i jeszcze nie stoisz pod sztanga. */
+        askNotify();
         persist(); render();
       });
     });
@@ -979,9 +1177,12 @@
       var w = parseFloat(document.getElementById("in-w").value);
       var r = parseInt(document.getElementById("in-r").value, 10);
       if (isNaN(w) || isNaN(r) || r <= 0) { toast("Wpisz ciężar i powtórzenia"); return; }
-      entryOf(editing.exId).sets[editing.i] = { w: w, r: r };
+      var en = entryOf(editing.exId);
+      en.sets[editing.i] = { w: w, r: r };
       var rd = exDef(editing.exId);
-      var secs = (rd && rd.rest) || REST_DEFAULT;
+      /* Wariant moze zmienic charakter ruchu, a z nim dlugosc przerwy:
+         rozpietki to izolacja (90 s), chest press ruch zlozony (120 s). */
+      var secs = rd ? restSecs(rd, en.variant) : REST_DEFAULT;
       editing = null;
       var lbl = secs >= 180 ? "Przerwa · główny ruch" : (secs >= 120 ? "Przerwa · ruch złożony" : "Przerwa · izolacja");
       rest = { end: Date.now() + secs * 1000, total: secs, buzzed: false, label: lbl };
