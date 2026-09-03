@@ -448,7 +448,10 @@
         { id: "row-db", name: "Wiosłowanie w opadzie", sets: 3, lo: 10, hi: 12, rest: 120,
           variants: [{ n: "Maszyna", label: "Wiosłowanie na maszynie (upper back)" }, { n: "Hantel", hand: true }] },
         { id: "pec-deck", name: "Rozpiętki na maszynie", sets: 3, lo: 12, hi: 15, rest: 90,
-          variants: [{ n: "Rozpiętki" }, { n: "Chest press", label: "Chest press szerokim chwytem", lo: 8, hi: 12, rest: 120 }] },
+          /* Chest press jest pierwszy, czyli domyslny, bo w praktyce robi tylko jego
+             (2/2 sesje). Warianty rozwiazuja sie PO NAZWIE, nie po indeksie, wiec
+             ta zamiana kolejnosci nie rusza starych wpisow. */
+          variants: [{ n: "Chest press", label: "Chest press szerokim chwytem", lo: 8, hi: 12, rest: 120 }, { n: "Rozpiętki" }] },
         { id: "lat-raise", name: "Wznosy bokiem z hantlami", sets: 3, lo: 12, hi: 15, rest: 90, hand: true },
         { id: "leg-press", name: "Prasa na nogi", sets: 3, lo: 10, hi: 15, rest: 120 },
         { id: "triceps-cable", name: "Prostowanie ramion na wyciągu", sets: 2, lo: 12, hi: 12, rest: 90 }
@@ -464,6 +467,11 @@
   var tab = "t";
   var editing = null;
   var openSess = null;
+  /* Raport domyslnie zawiera tylko sesje nowsze od ostatniego skopiowania, bo
+     przy kilkudziesieciu treningach pelny eksport jest nie do wklejenia.
+     Swiadomie NIE trafia do localStorage: po przeladowaniu wraca na "tylko nowe",
+     czyli na bezpieczniejszy z dwoch stanow. */
+  var onlyNew = true;
   var rest = (S.rest && typeof S.rest.end === "number" && S.rest.end > Date.now() - 20000)
     ? S.rest : null;
   /* armed opisuje harmonogram konkretnego AudioContextu, a ten nie przezywa
@@ -472,7 +480,7 @@
   if (rest) rest.armed = false;
   var toastTimer = null;
 
-  function blank() { return { sessions: [], active: null, rest: null }; }
+  function blank() { return { sessions: [], active: null, rest: null, lastExport: null }; }
 
   function load() {
     try {
@@ -482,6 +490,7 @@
       if (!o || !Array.isArray(o.sessions)) return blank();
       if (o.active === undefined) o.active = null;
       if (o.rest === undefined) o.rest = null;
+      if (o.lastExport === undefined) o.lastExport = null;
       return o;
     } catch (e) { return blank(); }
   }
@@ -868,6 +877,15 @@
   }
   function done(sessions) { return sessions.filter(function (s) { return s.end; }); }
 
+  /* Sesje nowsze od ostatniego skopiowania raportu. Oba znaczniki to ISO z
+     toISOString(), a ISO w UTC porownuje sie leksykograficznie, wiec zwykle
+     ">" na stringach wystarczy i nie trzeba parsowac dat. */
+  function newSince() {
+    var list = done(S.sessions);
+    if (!S.lastExport) return list;
+    return list.filter(function (s) { return s.end > S.lastExport; });
+  }
+
   function lastFor(exId, variant) {
     var list = done(S.sessions), i;
     for (i = list.length - 1; i >= 0; i--) {
@@ -1050,10 +1068,23 @@
       }
       h += "</div>";
     });
-    h += '<h2>Przekazanie danych</h2><div class="actions">' +
+    h += '<h2>Przekazanie danych</h2>';
+    if (S.lastExport) {
+      var nw = newSince().length, all = done(S.sessions).length;
+      h += '<div class="actions"><button class="btn ghost wide" id="onlynew" aria-pressed="' +
+        (onlyNew ? "true" : "false") + '">' +
+        (onlyNew ? "Zakres: tylko nowe (" + nw + ")" : "Zakres: wszystkie (" + all + ")") +
+        "</button></div>";
+    }
+    h += '<div class="actions">' +
       '<button class="btn primary wide" id="copy">Kopiuj raport</button>' +
       '<button class="btn ghost wide" id="dl">Pobierz kopię (JSON)</button></div>';
     h += '<p class="tiny" style="margin-top:10px;line-height:1.6">Raport to zwykły tekst. Wklej go w rozmowie z Claude, żeby przejrzał progresję. Dane żyją wyłącznie w tej przeglądarce, więc kopia JSON jest jedynym zabezpieczeniem przed czyszczeniem historii.</p>';
+    if (S.lastExport) {
+      h += '<p class="tiny" style="margin-top:6px;line-height:1.6">Ostatni raport skopiowany ' +
+        esc(dmy(S.lastExport)) + '. Starsze treningi są już zarchiwizowane, więc domyślnie ' +
+        'raport zawiera tylko nowsze. Przełącz zakres, jeśli chcesz przekazać całość od początku.</p>';
+    }
     h += '<textarea id="out" rows="7" style="margin-top:10px" readonly hidden></textarea>';
     return h;
   }
@@ -1090,11 +1121,23 @@
     if (S.active) renderClock();
   }, 1000);
 
-  function report() {
+  function report(only) {
     var list = done(S.sessions);
+    var pick = only ? newSince() : list;
     var out = "DZIENNIK TRENINGU - eksport " + dmy(new Date().toISOString()) + "\n";
     out += "Plan FBW A/B, 3x w tygodniu. Zapisanych treningów: " + list.length + "\n";
-    list.forEach(function (s, n) {
+    /* Ta linia jest dla odbiorcy raportu, nie dla apki: bez niej nie da sie
+       odroznic "mam dwa treningi" od "wyciete, reszta jest w archiwum". */
+    if (only && S.lastExport) {
+      out += "Ten raport: " + pick.length + " nowszych niż " + dmy(S.lastExport) +
+        ". Wcześniejsze były już przekazane, numeracja jest ciągła.\n";
+    }
+    if (!pick.length) {
+      out += "\nBrak nowych treningów od ostatniego raportu.\n";
+      return out;
+    }
+    pick.forEach(function (s) {
+      var n = list.indexOf(s);
       var mins = s.end && s.start ? Math.round((new Date(s.end) - new Date(s.start)) / 60000) : null;
       out += "\n[" + (n + 1) + "] " + dmy(s.end) + "  " + PLANS[s.plan].label.toUpperCase() +
         (mins !== null ? "  (" + mins + " min)" : "") + "\n";
@@ -1238,12 +1281,31 @@
       });
     });
 
+    if (q("onlynew")) q("onlynew").addEventListener("click", function () {
+      onlyNew = !onlyNew; render();
+    });
+
     if (q("copy")) q("copy").addEventListener("click", function () {
-      var txt = report(), out = document.getElementById("out");
+      var only = onlyNew && !!S.lastExport;
+      var sent = only ? newSince().length : done(S.sessions).length;
+      var txt = report(only), out = document.getElementById("out");
       out.hidden = false; out.value = txt;
+      /* Znacznik przesuwa sie WYLACZNIE po potwierdzonym zapisie do schowka.
+         Przy recznym kopiowaniu z textarea nie ma sygnalu, ze tekst faktycznie
+         wyszedl, a powtorne wyslanie tej samej sesji jest tanie - zgubienie
+         sesji na zawsze nie jest. */
+      var mark = function () {
+        if (!sent) return;
+        S.lastExport = new Date().toISOString();
+        persist();
+      };
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(txt).then(
-          function () { toast("Skopiowane. Wklej w rozmowie"); },
+          function () {
+            mark();
+            toast(sent ? "Skopiowane: " + sent + ". Wklej w rozmowie" : "Brak nowych treningów");
+            render();
+          },
           function () { out.select(); toast("Zaznacz tekst poniżej i skopiuj ręcznie"); }
         );
       } else { out.select(); toast("Zaznacz tekst poniżej i skopiuj ręcznie"); }
